@@ -1,0 +1,27 @@
+cabal-version:      3.0
+name:               lilsat
+version:            0.1.0.0
+synopsis:           A SAT solver built for learning
+-- description:
+license:            BSD-3-Clause
+license-file:       LICENSE
+author:             Michalis Pardalos
+maintainer:         me@mpardalos.com
+-- copyright:
+category:           Math
+build-type:         Simple
+extra-doc-files:    CHANGELOG.md
+-- extra-source-files:
+
+common warnings
+    ghc-options: -Wall
+
+executable lilsat
+    import:           warnings
+    main-is:          Main.hs
+    -- other-modules:
+    -- other-extensions:
+    build-depends: base ^>=4.19.2.0
+                 , hspec
+    hs-source-dirs:   exe
+    default-language: GHC2021
