@@ -14,17 +14,26 @@ evalLiteral valuation (Positive n) = valuation n
 evalLiteral valuation (Negative n) = not (valuation n)
 
 evalClause :: Valuation -> Clause -> Bool
-evalClause _ [] = False
-evalClause valuation (l:ls) = evalLiteral valuation l || evalClause valuation ls
+evalClause valuation = any (evalLiteral valuation)
 
 evalFormula :: Valuation -> Formula -> Bool
-evalFormula valuation [] = True
-evalFormula valuation (c:cs) = evalClause valuation c && evalFormula valuation cs
+evalFormula valuation = all (evalClause valuation)
 
 main :: IO ()
 main = hspec $ do
   describe "evaluator" $ do
-    it "positive literal" $
-      evalLiteral (const True) (Positive 0) `shouldBe` True
-    it "negative literal" $
-      evalLiteral (const True) (Negative 0) `shouldBe` False
+    describe "literal" $ do
+      it "positive literal" $
+        evalLiteral (const True) (Positive 0) `shouldBe` True
+      it "negative literal" $
+        evalLiteral (const True) (Negative 0) `shouldBe` False
+    describe "clause" $ do
+      it "yesno" $ evalClause (const True) [Positive 0, Negative 0] `shouldBe` True
+      it "nono" $ evalClause (const True) [Negative 0, Negative 0] `shouldBe` False
+    describe "formula" $ do
+      it "yesno" $
+        evalFormula (const True) [[Positive 0], [Negative 0]] `shouldBe` False
+      it "yesno" $
+        evalFormula (const True) [[Negative 0], [Negative 0]] `shouldBe` False
+      it "yesyes" $
+        evalFormula (const True) [[Positive 0], [Positive 0]] `shouldBe` True
