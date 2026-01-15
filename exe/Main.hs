@@ -12,7 +12,7 @@ import Data.List (isPrefixOf, isSuffixOf)
 import System.Directory (listDirectory)
 import System.FilePath ((</>), takeFileName)
 import Data.Int (Int8)
-import Safe (readNote, headNote)
+import Safe (readNote, headNote, headDef)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -52,6 +52,10 @@ instance Show Answer where
   show (SAT _) = "SAT"
   show UNSAT = "UNSAT"
   show UNKNOWN = "UNKNOWN"
+
+isSAT :: Answer -> Bool
+isSAT (SAT _) = True
+isSAT _ = False
 
 evalLiteral :: Valuation -> Literal -> Bool
 evalLiteral valuation lit 
@@ -113,17 +117,21 @@ chooseLit =
   headNote "Cannot choose lit from formula with empty clause"
   . headNote "Cannot choose lit from empty formula"
 
+getLiterals :: Formula -> [Literal]
+getLiterals = concat
+
 checkSat :: Formula -> Answer
 checkSat = checkSatWith Set.empty
   where
     checkSatWith :: Valuation -> Formula -> Answer
     checkSatWith valuation formula
       | isTriviallyUnsat formula =
-        trace ("Best I managed was: " ++ show valuation) UNSAT
-      | isTriviallyValid formula = SAT valuation
-      | otherwise =
-        let lit = chooseLit formula
-        in checkSatWith (Set.insert lit valuation) (simplify lit formula)
+        trace ("Conflict: " ++ show valuation) UNSAT
+      | isTriviallyValid formula = error ("SAT!" ++ show valuation)
+      | otherwise = headDef UNSAT . filter isSAT $
+        [ checkSatWith (Set.insert lit valuation) (simplify lit formula)
+        | lit <- getLiterals formula
+        ]
 
 testDir :: FilePath
 testDir = "tests"
