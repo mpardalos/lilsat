@@ -27,5 +27,6 @@ executable lilsat
                  , filepath
                  , safe
                  , text
+                 , containers
     hs-source-dirs:   exe
     default-language: GHC2021
