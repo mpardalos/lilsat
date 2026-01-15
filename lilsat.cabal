@@ -23,5 +23,9 @@ executable lilsat
     -- other-extensions:
     build-depends: base ^>=4.19.2.0
                  , hspec
+                 , directory
+                 , filepath
+                 , safe
+                 , text
     hs-source-dirs:   exe
     default-language: GHC2021
