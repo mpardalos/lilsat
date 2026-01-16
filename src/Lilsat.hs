@@ -62,12 +62,11 @@ negateLit (Literal n) = Literal (-n)
 
 type Valuation = Set Literal
 
-data Answer = SAT Valuation | UNSAT | UNKNOWN
+data Answer = SAT Valuation | UNSAT
 
 instance Show Answer where
   show (SAT _) = "SAT"
   show UNSAT = "UNSAT"
-  show UNKNOWN = "UNKNOWN"
 
 isSAT :: Answer -> Bool
 isSAT (SAT _) = True
@@ -154,23 +153,24 @@ simplifyIterative valuation formula =
             (foldr simplify formula unitClauses)
 
 checkSat :: Formula -> Answer
-checkSat = headDef UNSAT . filter isSAT . checkSatWith Set.empty
+checkSat = checkSatWith Set.empty
   where
-    checkSatWith :: Valuation -> Formula -> [Answer]
-    checkSatWith initialValuation initialFormula = do
+    checkSatWith :: Valuation -> Formula -> Answer
+    checkSatWith initialValuation initialFormula =
       let (extendedValuation, simplifiedFormula) =
             simplifyIterative initialValuation initialFormula
-      if
-        | isTriviallyUnsat simplifiedFormula ->
-            -- trace ("Conflict: " ++ show extendedValuation)
-            [UNSAT]
-        | isTriviallyValid simplifiedFormula ->
-            -- trace ("SAT!" ++ show extendedValuation)
-            [SAT extendedValuation]
-        | otherwise -> do
-            let lit = chooseLit simplifiedFormula
-            decisionLit <- [lit, negateLit lit]
-            -- traceM ("Trying " ++ show lit)
-            checkSatWith
-              (Set.insert decisionLit extendedValuation)
-              (simplify decisionLit simplifiedFormula)
+       in if
+            | isTriviallyUnsat simplifiedFormula ->
+                -- trace ("Conflict: " ++ show extendedValuation)
+                UNSAT
+            | isTriviallyValid simplifiedFormula ->
+                -- trace ("SAT!" ++ show extendedValuation)
+                SAT extendedValuation
+            | otherwise -> do
+                let lit = chooseLit simplifiedFormula
+                case checkSatWith (Set.insert lit extendedValuation) (simplify lit simplifiedFormula) of
+                  UNSAT {} ->
+                    checkSatWith
+                      (Set.insert (negateLit lit) extendedValuation)
+                      (simplify (negateLit lit) simplifiedFormula)
+                  answer@SAT {} -> answer
