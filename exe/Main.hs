@@ -3,12 +3,12 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE OverloadedLists #-}
+{-# LANGUAGE MultiWayIf #-}
 module Main where
 
 import Test.Hspec
-import Data.Maybe (fromJust)
 import Data.Function ((&))
-import Data.List (isPrefixOf, isSuffixOf)
+import Data.List (isSuffixOf)
 import System.Directory (listDirectory)
 import System.FilePath ((</>), takeFileName)
 import Data.Int (Int8)
@@ -16,10 +16,7 @@ import Safe (readNote, headNote, headDef)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import Data.Map (Map)
-import qualified Data.Map as Map
 import Data.Maybe (mapMaybe)
-import Debug.Trace (trace)
 import Data.Set (Set)
 import qualified Data.Set as Set
 
@@ -57,14 +54,18 @@ isSAT :: Answer -> Bool
 isSAT (SAT _) = True
 isSAT _ = False
 
-evalLiteral :: Valuation -> Literal -> Bool
-evalLiteral valuation lit 
-  | Set.member lit valuation = True
-  | Set.member (negateLit lit) valuation = False
-  | otherwise = error ("Not in valuation: " ++ show lit)
+evalLiteral :: Valuation -> Literal -> Maybe Bool
+evalLiteral valuation lit
+  | Set.member lit valuation = Just True
+  | Set.member (negateLit lit) valuation = Just False
+  | otherwise = Nothing -- error ("Not in valuation: " ++ show lit)
 
 evalClause :: Valuation -> Clause -> Bool
-evalClause valuation = any (evalLiteral valuation)
+evalClause _ [] = False
+evalClause valuation (lit : lits) = case evalLiteral valuation lit of
+  Just True -> True
+  Just False -> evalClause valuation lits
+  Nothing -> evalClause valuation lits || error "Missing literals"
 
 evalFormula :: Valuation -> Formula -> Bool
 evalFormula valuation = all (evalClause valuation)
@@ -120,18 +121,33 @@ chooseLit =
 getLiterals :: Formula -> [Literal]
 getLiterals = concat
 
+getUnitClauses :: Formula -> [Literal]
+getUnitClauses [] = []
+getUnitClauses ([lit]:clauses) = lit : getUnitClauses clauses
+getUnitClauses (_:clauses) = getUnitClauses clauses
+
 checkSat :: Formula -> Answer
-checkSat = checkSatWith Set.empty
+checkSat = headDef UNSAT . filter isSAT . checkSatWith Set.empty
   where
-    checkSatWith :: Valuation -> Formula -> Answer
-    checkSatWith valuation formula
-      | isTriviallyUnsat formula =
-        trace ("Conflict: " ++ show valuation) UNSAT
-      | isTriviallyValid formula = error ("SAT!" ++ show valuation)
-      | otherwise = headDef UNSAT . filter isSAT $
-        [ checkSatWith (Set.insert lit valuation) (simplify lit formula)
-        | lit <- getLiterals formula
-        ]
+    checkSatWith :: Valuation -> Formula -> [Answer]
+    checkSatWith initialValuation initialFormula = do
+      let unitClauses = getUnitClauses initialFormula
+          simplifiedFormula = foldr simplify initialFormula unitClauses
+          extendedValuation = foldr Set.insert initialValuation unitClauses
+      if
+        | isTriviallyUnsat simplifiedFormula ->
+          -- trace ("Conflict: " ++ show extendedValuation)
+          [UNSAT]
+        | isTriviallyValid simplifiedFormula ->
+          -- trace ("SAT!" ++ show extendedValuation)
+          [SAT extendedValuation]
+        | otherwise -> do
+            let lit = chooseLit simplifiedFormula
+            decisionLit <- [lit, negateLit lit]
+            -- traceM ("Trying " ++ show lit)
+            checkSatWith
+              (Set.insert decisionLit extendedValuation)
+              (simplify decisionLit simplifiedFormula)
 
 testDir :: FilePath
 testDir = "tests"
