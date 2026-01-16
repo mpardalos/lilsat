@@ -103,9 +103,7 @@ readCNF txt =
   readClause [] = error "Empty clause"
   readClause [0] = []
   readClause (0:_) = error "Clause does not terminate after 0"
-  readClause (x:xs)
-    | x > 0 = Positive x : readClause xs
-    | otherwise = Negative (-x) : readClause xs
+  readClause (x:xs) = Literal x : readClause xs
 
 simplify :: Literal -> Formula -> Formula
 simplify simpLit = mapMaybe simplifyClause
