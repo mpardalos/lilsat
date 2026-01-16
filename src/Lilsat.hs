@@ -27,6 +27,7 @@ module Lilsat
   )
 where
 
+import Data.Function ((&))
 import Data.Int (Int8)
 import Data.Maybe (mapMaybe)
 import Data.Set (Set)
@@ -34,7 +35,6 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Safe (headDef, headNote, readNote)
-import Data.Function ((&))
 
 type Atom = Int8
 
@@ -143,14 +143,23 @@ getUnitClauses [] = []
 getUnitClauses ([lit] : clauses) = lit : getUnitClauses clauses
 getUnitClauses (_ : clauses) = getUnitClauses clauses
 
+simplifyIterative :: Valuation -> Formula -> (Valuation, Formula)
+simplifyIterative valuation formula =
+  let unitClauses = getUnitClauses formula
+   in if null unitClauses
+        then (valuation, formula)
+        else
+          simplifyIterative
+            (foldr Set.insert valuation unitClauses)
+            (foldr simplify formula unitClauses)
+
 checkSat :: Formula -> Answer
 checkSat = headDef UNSAT . filter isSAT . checkSatWith Set.empty
   where
     checkSatWith :: Valuation -> Formula -> [Answer]
     checkSatWith initialValuation initialFormula = do
-      let unitClauses = getUnitClauses initialFormula
-          simplifiedFormula = foldr simplify initialFormula unitClauses
-          extendedValuation = foldr Set.insert initialValuation unitClauses
+      let (extendedValuation, simplifiedFormula) =
+            simplifyIterative initialValuation initialFormula
       if
         | isTriviallyUnsat simplifiedFormula ->
             -- trace ("Conflict: " ++ show extendedValuation)
