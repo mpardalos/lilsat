@@ -177,4 +177,9 @@ makeTest predicate filePath =
     content <- TIO.readFile filePath
     let formula = readCNF content
     formula `shouldSatisfy` (not . null)
-    checkSat formula `shouldSatisfy` predicate
+    let answer = checkSat formula
+    answer `shouldSatisfy` predicate
+    case answer of
+      SAT valuation -> evalFormula valuation formula `shouldBe` True
+      _ -> pure ()
+
