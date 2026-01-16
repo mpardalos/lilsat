@@ -13,55 +13,46 @@ build-type:         Simple
 extra-doc-files:    CHANGELOG.md
 -- extra-source-files:
 
-common warnings
-    ghc-options: -Wall
+common common
+    ghc-options:
+        -Wall
+        -threaded -rtsopts -with-rtsopts=-N
+    default-language: GHC2021
+    build-depends: base
+                 , text
+                 , containers
+                 , safe
+                 , directory
+                 , filepath
+                 , text
+                 , hspec
+                 , criterion
+                 , filepath
+                 , process
+                 , temporary
 
 library
-    import:           warnings
+    import:           common
     exposed-modules:  Lilsat
-    build-depends:    base ^>=4.19.2.0
-                    , text
-                    , containers
-                    , safe
     hs-source-dirs:   src
-    default-language: GHC2021
 
 executable lilsat
-    import:           warnings
+    import:           common
     main-is:          Main.hs
-    -- other-modules:
-    -- other-extensions:
-    build-depends: base ^>=4.19.2.0
-                 , lilsat
-                 , text
+    build-depends:    lilsat
     hs-source-dirs:   exe
-    default-language: GHC2021
 
 test-suite lilsat-test
-    import:           warnings
+    import:           common
     type:             exitcode-stdio-1.0
     main-is:          Spec.hs
-    other-modules:    Lilsat.SolverSpec
-    build-depends:    base ^>=4.19.2.0
-                    , lilsat
-                    , hspec
-                    , directory
-                    , filepath
-                    , text
+    build-depends:    lilsat
     hs-source-dirs:   test
-    default-language: GHC2021
-    ghc-options:      -threaded -rtsopts -with-rtsopts=-N
-    build-tool-depends: hspec-discover:hspec-discover
 
 benchmark lilsat-bench
-    import:           warnings
+    import:           common
     type:             exitcode-stdio-1.0
     main-is:          Bench.hs
-    build-depends:    base ^>=4.19.2.0
-                    , lilsat
-                    , criterion
-                    , text
-                    , filepath
+    build-depends:    lilsat
     hs-source-dirs:   bench
-    default-language: GHC2021
     ghc-options:      -O2
