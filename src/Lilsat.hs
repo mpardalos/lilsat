@@ -28,22 +28,23 @@ module Lilsat
 where
 
 import Data.Function ((&))
-import Data.Int (Int8)
 import Data.Maybe (mapMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import Safe (headDef, headNote, readNote)
+import Data.Vector (Vector)
+import Data.Vector qualified as V
+import Safe (headNote, readNote)
 
 type Atom = Int
 
 newtype Literal = Literal Atom
   deriving (Show, Eq, Ord)
 
-type Clause = [Literal]
+type Clause = Vector Literal
 
-type Formula = [Clause]
+type Formula = Vector Clause
 
 pattern Positive :: Atom -> Literal
 pattern Positive n <- Literal (\x -> if x > 0 then Just (fromIntegral x) else Nothing -> Just n)
@@ -62,11 +63,10 @@ negateLit (Literal n) = Literal (-n)
 
 type Valuation = Set Literal
 
-data Answer = SAT Valuation | UNSAT
-
-instance Show Answer where
-  show (SAT _) = "SAT"
-  show UNSAT = "UNSAT"
+data Answer
+  = SAT Valuation
+  | UNSAT
+  deriving (Show)
 
 isSAT :: Answer -> Bool
 isSAT (SAT _) = True
@@ -79,11 +79,19 @@ evalLiteral valuation lit
   | otherwise = Nothing -- error ("Not in valuation: " ++ show lit)
 
 evalClause :: Valuation -> Clause -> Bool
-evalClause _ [] = False
-evalClause valuation (lit : lits) = case evalLiteral valuation lit of
-  Just True -> True
-  Just False -> evalClause valuation lits
-  Nothing -> evalClause valuation lits || error "Missing literals"
+evalClause valuation =
+  V.foldr
+    ( \lit acc -> case evalLiteral valuation lit of
+        Just True -> True
+        Just False -> acc
+        Nothing -> acc || error "Missing literals"
+    )
+    False
+
+-- evalClause valuation (lit : lits) = case evalLiteral valuation lit of
+--   Just True -> True
+--   Just False -> evalClause valuation lits
+--   Nothing -> evalClause valuation lits || error "Missing literals"
 
 evalFormula :: Valuation -> Formula -> Bool
 evalFormula valuation = all (evalClause valuation)
@@ -98,28 +106,33 @@ readCNF txt =
     & filter (/= "%")
     & filter (/= "0")
     & map readClauseLine
+    & V.fromList
   where
     readClauseLine :: Text -> Clause
-    readClauseLine = readClause . map (readNote "literal" . T.unpack) . T.words
+    readClauseLine = V.fromList . readClause . map (readNote "literal" . T.unpack) . T.words
 
-    readClause :: [Int] -> Clause
+    readClause :: [Int] -> [Literal]
     readClause [] = error "Empty clause"
     readClause [0] = []
     readClause (0 : _) = error "Clause does not terminate after 0"
     readClause (x : xs) = Literal x : readClause xs
 
 simplify :: Literal -> Formula -> Formula
-simplify simpLit = mapMaybe simplifyClause
+simplify simpLit = V.mapMaybe simplifyClause
   where
     simplifyClause :: Clause -> Maybe Clause
-    simplifyClause [] = Just []
-    simplifyClause (lit : lits)
-      | lit == simpLit =
-          Nothing -- This clause is solved, delete it
-      | lit == negateLit simpLit =
-          simplifyClause lits -- This literal is impossible, drop it and try the rest
-      | otherwise =
-          (lit :) <$> simplifyClause lits -- Not this lit, continue
+    simplifyClause =
+      V.foldr
+        ( \lit acc ->
+            if
+              | lit == simpLit ->
+                  Nothing -- This clause is solved, delete it
+              | lit == negateLit simpLit ->
+                  acc -- This literal is impossible, drop it
+              | otherwise ->
+                  V.cons lit <$> acc -- Not this lit, continue
+        )
+        (Just [])
 
 -- | Is this formula true for all assignments
 isTriviallyValid :: Formula -> Bool
@@ -132,12 +145,18 @@ isTriviallyUnsat = any null -- The empty clause is unsat
 chooseLit :: Formula -> Literal
 chooseLit =
   headNote "Cannot choose lit from formula with empty clause"
+    . V.toList
     . headNote "Cannot choose lit from empty formula"
+    . V.toList
 
 getUnitClauses :: Formula -> [Literal]
-getUnitClauses [] = []
-getUnitClauses ([lit] : clauses) = lit : getUnitClauses clauses
-getUnitClauses (_ : clauses) = getUnitClauses clauses
+getUnitClauses =
+  mapMaybe
+    ( \case
+        [lit] -> Just lit
+        _ -> Nothing
+    )
+    . V.toList
 
 simplifyIterative :: Valuation -> Formula -> (Valuation, Formula)
 simplifyIterative valuation formula =
@@ -159,14 +178,16 @@ checkSat = checkSatWith Set.empty
        in if
             | isTriviallyUnsat simplifiedFormula ->
                 -- trace ("Conflict: " ++ show extendedValuation)
-                UNSAT
+                UNSAT -- (error "TODO: Learned clause")
             | isTriviallyValid simplifiedFormula ->
                 -- trace ("SAT!" ++ show extendedValuation)
                 SAT extendedValuation
             | otherwise -> do
                 let lit = chooseLit simplifiedFormula
-                case checkSatWith (Set.insert lit extendedValuation) (simplify lit simplifiedFormula) of
-                  UNSAT {} ->
+                case checkSatWith
+                  (Set.insert lit extendedValuation)
+                  (simplify lit simplifiedFormula) of
+                  UNSAT{} ->
                     checkSatWith
                       (Set.insert (negateLit lit) extendedValuation)
                       (simplify (negateLit lit) simplifiedFormula)
