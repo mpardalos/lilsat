@@ -1,44 +1,48 @@
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE MultiWayIf #-}
+{-# LANGUAGE OverloadedLists #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ViewPatterns #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE OverloadedLists #-}
-{-# LANGUAGE MultiWayIf #-}
+
 module Lilsat
   ( -- Types
-    Atom
-  , Literal
-  , Clause
-  , Formula
-  , Valuation
-  , Answer(..)
-
-  -- Pattern synonyms
-  , pattern Positive
-  , pattern Negative
-
-  -- Functions
-  , negateLit
-  , isSAT
-  , evalLiteral
-  , evalClause
-  , evalFormula
-  , readCNF
-  , checkSat
-  ) where
+    Atom,
+    Literal,
+    Clause,
+    Formula,
+    Valuation,
+    Answer (..),
+    -- Pattern synonyms
+    pattern Positive,
+    pattern Negative,
+    -- Functions
+    negateLit,
+    isSAT,
+    evalLiteral,
+    evalClause,
+    evalFormula,
+    readCNF,
+    checkSat,
+  )
+where
 
 import Data.Int (Int8)
-import Safe (readNote, headNote, headDef)
-import Data.Text (Text)
-import qualified Data.Text as T
 import Data.Maybe (mapMaybe)
 import Data.Set (Set)
-import qualified Data.Set as Set
+import Data.Set qualified as Set
+import Data.Text (Text)
+import Data.Text qualified as T
+import Safe (headDef, headNote, readNote)
+import Data.Function ((&))
 
 type Atom = Int8
+
 newtype Literal = Literal Atom
   deriving (Show, Eq, Ord)
+
 type Clause = [Literal]
+
 type Formula = [Clause]
 
 pattern Positive :: Atom -> Literal
@@ -54,7 +58,7 @@ pattern Negative n <- Literal (\x -> if x < 0 then Just (fromIntegral (negate x)
 {-# COMPLETE Positive, Negative #-}
 
 negateLit :: Literal -> Literal
-negateLit (Literal n) = Literal (- n)
+negateLit (Literal n) = Literal (-n)
 
 type Valuation = Set Literal
 
@@ -88,35 +92,35 @@ evalFormula valuation = all (evalClause valuation)
 readCNF :: Text -> Formula
 readCNF txt =
   T.lines txt
-  & map T.strip
-  & filter (not . T.null)
-  & filter (not . ("p" `T.isPrefixOf`))
-  & filter (not . ("c" `T.isPrefixOf`))
-  & filter (/= "%")
-  & filter (/= "0")
-  & map readClauseLine
- where
-  readClauseLine :: Text -> Clause
-  readClauseLine = readClause . map (readNote "literal" . T.unpack) . T.words
+    & map T.strip
+    & filter (not . T.null)
+    & filter (not . ("p" `T.isPrefixOf`))
+    & filter (not . ("c" `T.isPrefixOf`))
+    & filter (/= "%")
+    & filter (/= "0")
+    & map readClauseLine
+  where
+    readClauseLine :: Text -> Clause
+    readClauseLine = readClause . map (readNote "literal" . T.unpack) . T.words
 
-  readClause :: [Int8] -> Clause
-  readClause [] = error "Empty clause"
-  readClause [0] = []
-  readClause (0:_) = error "Clause does not terminate after 0"
-  readClause (x:xs) = Literal x : readClause xs
+    readClause :: [Int8] -> Clause
+    readClause [] = error "Empty clause"
+    readClause [0] = []
+    readClause (0 : _) = error "Clause does not terminate after 0"
+    readClause (x : xs) = Literal x : readClause xs
 
 simplify :: Literal -> Formula -> Formula
 simplify simpLit = mapMaybe simplifyClause
   where
     simplifyClause :: Clause -> Maybe Clause
     simplifyClause [] = Just []
-    simplifyClause (lit:lits)
+    simplifyClause (lit : lits)
       | lit == simpLit =
-        Nothing -- This clause is solved, delete it
+          Nothing -- This clause is solved, delete it
       | lit == negateLit simpLit =
-        simplifyClause lits -- This literal is impossible, drop it and try the rest
+          simplifyClause lits -- This literal is impossible, drop it and try the rest
       | otherwise =
-        (lit :) <$> simplifyClause lits -- Not this lit, continue
+          (lit :) <$> simplifyClause lits -- Not this lit, continue
 
 -- | Is this formula true for all assignments
 isTriviallyValid :: Formula -> Bool
@@ -129,15 +133,15 @@ isTriviallyUnsat = any null -- The empty clause is unsat
 chooseLit :: Formula -> Literal
 chooseLit =
   headNote "Cannot choose lit from formula with empty clause"
-  . headNote "Cannot choose lit from empty formula"
+    . headNote "Cannot choose lit from empty formula"
 
 getLiterals :: Formula -> [Literal]
 getLiterals = concat
 
 getUnitClauses :: Formula -> [Literal]
 getUnitClauses [] = []
-getUnitClauses ([lit]:clauses) = lit : getUnitClauses clauses
-getUnitClauses (_:clauses) = getUnitClauses clauses
+getUnitClauses ([lit] : clauses) = lit : getUnitClauses clauses
+getUnitClauses (_ : clauses) = getUnitClauses clauses
 
 checkSat :: Formula -> Answer
 checkSat = headDef UNSAT . filter isSAT . checkSatWith Set.empty
@@ -149,11 +153,11 @@ checkSat = headDef UNSAT . filter isSAT . checkSatWith Set.empty
           extendedValuation = foldr Set.insert initialValuation unitClauses
       if
         | isTriviallyUnsat simplifiedFormula ->
-          -- trace ("Conflict: " ++ show extendedValuation)
-          [UNSAT]
+            -- trace ("Conflict: " ++ show extendedValuation)
+            [UNSAT]
         | isTriviallyValid simplifiedFormula ->
-          -- trace ("SAT!" ++ show extendedValuation)
-          [SAT extendedValuation]
+            -- trace ("SAT!" ++ show extendedValuation)
+            [SAT extendedValuation]
         | otherwise -> do
             let lit = chooseLit simplifiedFormula
             decisionLit <- [lit, negateLit lit]
@@ -161,8 +165,3 @@ checkSat = headDef UNSAT . filter isSAT . checkSatWith Set.empty
             checkSatWith
               (Set.insert decisionLit extendedValuation)
               (simplify decisionLit simplifiedFormula)
-
--- Operator for Data.Function.(&)
-(&) :: a -> (a -> b) -> b
-x & f = f x
-{-# INLINE (&) #-}
