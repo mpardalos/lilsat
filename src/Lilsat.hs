@@ -36,7 +36,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Safe (headDef, headNote, readNote)
 
-type Atom = Int8
+type Atom = Int
 
 newtype Literal = Literal Atom
   deriving (Show, Eq, Ord)
@@ -102,7 +102,7 @@ readCNF txt =
     readClauseLine :: Text -> Clause
     readClauseLine = readClause . map (readNote "literal" . T.unpack) . T.words
 
-    readClause :: [Int8] -> Clause
+    readClause :: [Int] -> Clause
     readClause [] = error "Empty clause"
     readClause [0] = []
     readClause (0 : _) = error "Clause does not terminate after 0"
