@@ -134,9 +134,6 @@ chooseLit =
   headNote "Cannot choose lit from formula with empty clause"
     . headNote "Cannot choose lit from empty formula"
 
-getLiterals :: Formula -> [Literal]
-getLiterals = concat
-
 getUnitClauses :: Formula -> [Literal]
 getUnitClauses [] = []
 getUnitClauses ([lit] : clauses) = lit : getUnitClauses clauses
