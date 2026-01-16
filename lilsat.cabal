@@ -30,6 +30,7 @@ common common
                  , filepath
                  , process
                  , temporary
+                 , vector
 
 library
     import:           common
