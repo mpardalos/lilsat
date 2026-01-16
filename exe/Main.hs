@@ -168,7 +168,7 @@ discoverTests dir = do
   files <- listDirectory dir
   let cnfFiles =
         filter (\f -> ".cnf" `isSuffixOf` f) files
-        & take 2
+        -- & take 100
   return $ map (dir </>) cnfFiles
 
 makeTest :: (Answer -> Bool) -> FilePath -> Spec
