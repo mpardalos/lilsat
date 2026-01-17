@@ -27,15 +27,18 @@ module Lilsat
   )
 where
 
+import Control.Monad (join)
+import Data.Coerce (coerce)
 import Data.Function ((&))
-import Data.Maybe (mapMaybe)
-import Data.Set (Set)
-import Data.Set qualified as Set
+import Data.IntSet (IntSet)
+import Data.IntSet qualified as IntSet
+import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Vector (Vector)
 import Data.Vector qualified as V
-import Safe (headNote, readNote)
+import Debug.Trace (trace)
+import Safe (headMay, headNote, readNote)
 
 type Atom = Int
 
@@ -61,7 +64,20 @@ pattern Negative n <- Literal (\x -> if x < 0 then Just (fromIntegral (negate x)
 negateLit :: Literal -> Literal
 negateLit (Literal n) = Literal (-n)
 
-type Valuation = Set Literal
+type Valuation = IntSet
+
+learn :: Literal -> Valuation -> Valuation
+learn (Literal lit) valuation
+  -- | trace ("Propagated " ++ show lit) False = undefined
+  | IntSet.member (-lit) valuation = error ("Conflicting learn " ++ show lit)
+  | otherwise = IntSet.insert lit valuation
+
+learnNew :: Literal -> Valuation -> Valuation
+learnNew (Literal lit) valuation
+  -- | trace ("Decided " ++ show lit) False = undefined
+  | IntSet.member lit valuation = trace ("Double learning " ++ show lit) valuation
+  | IntSet.member (-lit) valuation = error ("Conflicting learn " ++ show lit)
+  | otherwise = IntSet.insert lit valuation
 
 data Answer
   = SAT Valuation
@@ -72,29 +88,31 @@ isSAT :: Answer -> Bool
 isSAT (SAT _) = True
 isSAT _ = False
 
+partialAnd :: Maybe Bool -> Maybe Bool -> Maybe Bool
+partialAnd (Just False) _ = Just False
+partialAnd _ (Just False) = Just False
+partialAnd (Just b1) (Just b2) = Just (b1 && b2)
+partialAnd _ _ = Nothing
+
+partialOr :: Maybe Bool -> Maybe Bool -> Maybe Bool
+partialOr (Just True) _ = Just True
+partialOr _ (Just True) = Just True
+partialOr (Just b1) (Just b2) = Just (b1 || b2)
+partialOr _ _ = Nothing
+
 evalLiteral :: Valuation -> Literal -> Maybe Bool
-evalLiteral valuation lit
-  | Set.member lit valuation = Just True
-  | Set.member (negateLit lit) valuation = Just False
+evalLiteral valuation (Literal lit)
+  | IntSet.member lit valuation = Just True
+  | IntSet.member (-lit) valuation = Just False
   | otherwise = Nothing -- error ("Not in valuation: " ++ show lit)
 
-evalClause :: Valuation -> Clause -> Bool
+evalClause :: Valuation -> Clause -> Maybe Bool
 evalClause valuation =
-  V.foldr
-    ( \lit acc -> case evalLiteral valuation lit of
-        Just True -> True
-        Just False -> acc
-        Nothing -> acc || error "Missing literals"
-    )
-    False
+  V.foldr partialOr (Just False) . V.map (evalLiteral valuation)
 
--- evalClause valuation (lit : lits) = case evalLiteral valuation lit of
---   Just True -> True
---   Just False -> evalClause valuation lits
---   Nothing -> evalClause valuation lits || error "Missing literals"
-
-evalFormula :: Valuation -> Formula -> Bool
-evalFormula valuation = all (evalClause valuation)
+evalFormula :: Valuation -> Formula -> Maybe Bool
+evalFormula valuation =
+  V.foldr partialAnd (Just True) . V.map (evalClause valuation)
 
 readCNF :: Text -> Formula
 readCNF txt =
@@ -117,78 +135,36 @@ readCNF txt =
     readClause (0 : _) = error "Clause does not terminate after 0"
     readClause (x : xs) = Literal x : readClause xs
 
-simplify :: Literal -> Formula -> Formula
-simplify simpLit = V.mapMaybe simplifyClause
+chooseLit :: Valuation -> Formula -> Maybe Literal
+chooseLit valuation =
+  headMay
+    . V.toList
+    . V.filter ((Nothing ==) . evalLiteral valuation)
+    . join
+
+unitPropagate :: Formula -> Valuation -> Maybe Valuation
+unitPropagate formula initialValuation = V.foldM unitPropagateClause initialValuation formula
   where
-    simplifyClause :: Clause -> Maybe Clause
-    simplifyClause =
-      V.foldr
-        ( \lit acc ->
-            if
-              | lit == simpLit ->
-                  Nothing -- This clause is solved, delete it
-              | lit == negateLit simpLit ->
-                  acc -- This literal is impossible, drop it
-              | otherwise ->
-                  V.cons lit <$> acc -- Not this lit, continue
-        )
-        (Just [])
-
--- | Is this formula true for all assignments
-isTriviallyValid :: Formula -> Bool
-isTriviallyValid = null -- If no clauses, then trivially true
-
--- | Is this formula false for all assignments
-isTriviallyUnsat :: Formula -> Bool
-isTriviallyUnsat = any null -- The empty clause is unsat
-
-chooseLit :: Formula -> Literal
-chooseLit =
-  headNote "Cannot choose lit from formula with empty clause"
-    . V.toList
-    . headNote "Cannot choose lit from empty formula"
-    . V.toList
-
-getUnitClauses :: Formula -> [Literal]
-getUnitClauses =
-  mapMaybe
-    ( \case
-        [lit] -> Just lit
-        _ -> Nothing
-    )
-    . V.toList
-
-simplifyIterative :: Valuation -> Formula -> (Valuation, Formula)
-simplifyIterative valuation formula =
-  let unitClauses = getUnitClauses formula
-   in if null unitClauses
-        then (valuation, formula)
-        else
-          simplifyIterative
-            (foldr Set.insert valuation unitClauses)
-            (foldr simplify formula unitClauses)
+    unitPropagateClause :: Valuation -> Clause -> Maybe Valuation
+    unitPropagateClause valuation clause =
+      let ambiguous = V.filter ((== Nothing) . evalLiteral valuation) clause
+          hasTrue = (> 0) . V.length . V.filter ((== Just True) . evalLiteral valuation) $ clause
+       in if hasTrue
+            then Just valuation
+            else case V.length ambiguous of
+              0 -> Nothing
+              1 -> Just (learn (V.head ambiguous) valuation)
+              _ -> Just valuation
 
 checkSat :: Formula -> Answer
-checkSat = checkSatWith Set.empty
+checkSat formula = go IntSet.empty
   where
-    checkSatWith :: Valuation -> Formula -> Answer
-    checkSatWith initialValuation initialFormula =
-      let (extendedValuation, simplifiedFormula) =
-            simplifyIterative initialValuation initialFormula
-       in if
-            | isTriviallyUnsat simplifiedFormula ->
-                -- trace ("Conflict: " ++ show extendedValuation)
-                UNSAT -- (error "TODO: Learned clause")
-            | isTriviallyValid simplifiedFormula ->
-                -- trace ("SAT!" ++ show extendedValuation)
-                SAT extendedValuation
-            | otherwise -> do
-                let lit = chooseLit simplifiedFormula
-                case checkSatWith
-                  (Set.insert lit extendedValuation)
-                  (simplify lit simplifiedFormula) of
-                  UNSAT{} ->
-                    checkSatWith
-                      (Set.insert (negateLit lit) extendedValuation)
-                      (simplify (negateLit lit) simplifiedFormula)
-                  answer@SAT {} -> answer
+    go :: Valuation -> Answer
+    go valuation
+      | Just lit <- chooseLit valuation formula =
+          let withLit = go <$> unitPropagate formula (learnNew lit valuation)
+              withNegation = go <$> unitPropagate formula (learnNew (negateLit lit) valuation)
+           in case withLit of
+                Just answer@SAT {} -> answer
+                _ -> fromMaybe UNSAT withNegation
+      | otherwise = SAT valuation
