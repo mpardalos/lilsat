@@ -104,5 +104,5 @@ makeTest predicate filePath =
       Just answer -> do
         answer `shouldSatisfy` predicate
         case answer of
-          SAT valuation -> evalFormula valuation formula `shouldBe` True
+          SAT valuation -> evalFormula valuation formula `shouldBe` Just True
           _ -> pure ()
