@@ -94,7 +94,7 @@ findCNFFiles dir = do
 
 makeTest :: (Answer -> Bool) -> FilePath -> Spec
 makeTest predicate filePath =
-  it (takeFileName filePath) $ do
+  it filePath $ do
     content <- TIO.readFile filePath
     let formula = readCNF content
     formula `shouldSatisfy` (not . null)
