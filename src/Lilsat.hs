@@ -12,6 +12,7 @@ module Lilsat
     Valuation,
     Answer (..),
     Reason (..),
+    VariableData (..),
     -- Pattern synonyms
     pattern Positive,
     pattern Negative,
@@ -69,13 +70,18 @@ negateLit (Literal n) = Literal (-n)
 data Reason = Decision | Consequence Int
   deriving (Show)
 
-type Valuation = IntMap Reason
+data VariableData = VariableData
+  { value :: Bool,
+    reason :: Reason
+  }
+  deriving (Show)
+
+type Valuation = IntMap VariableData
 
 learn :: Literal -> Reason -> Valuation -> Valuation
 learn (Literal lit) reason valuation
   | IntMap.member lit valuation = error ("Double learn " ++ show lit)
-  | IntMap.member (-lit) valuation = error ("Conflicting learn " ++ show lit)
-  | otherwise = IntMap.insert lit reason valuation
+  | otherwise = IntMap.insert (abs lit) (VariableData {value = lit > 0, reason}) valuation
 
 data Answer
   = SAT Valuation
@@ -99,10 +105,9 @@ partialOr (Just b1) (Just b2) = Just (b1 || b2)
 partialOr _ _ = Nothing
 
 evalLiteral :: Valuation -> Literal -> Maybe Bool
-evalLiteral valuation (Literal lit)
-  | IntMap.member lit valuation = Just True
-  | IntMap.member (-lit) valuation = Just False
-  | otherwise = Nothing -- error ("Not in valuation: " ++ show lit)
+evalLiteral valuation (Literal lit) =
+  let atomValue = value <$> IntMap.lookup (abs lit) valuation
+   in if lit > 0 then atomValue else not <$> atomValue
 
 evalClause :: Valuation -> Clause -> Maybe Bool
 evalClause valuation =

@@ -3,8 +3,7 @@ module Main where
 import Control.Monad (when)
 import Data.Foldable (forM_)
 import Data.IntMap qualified as IntMap
-import Data.List (intercalate, sortBy)
-import Data.Ord (comparing)
+import Data.List (intercalate)
 import Data.Text.IO qualified as TIO
 import Data.Vector qualified as V
 import Lilsat
@@ -15,23 +14,23 @@ printValuation :: Formula -> Valuation -> IO ()
 printValuation formula valuation =
   mapM_
     (uncurry (printValue 0))
-    (sortBy (comparing (abs . fst)) $ IntMap.toList valuation)
+    (IntMap.toList valuation)
   where
     printIndent :: Int -> IO ()
     printIndent level = do
       putStr (replicate (2 * level) ' ')
       when (level > 0) $ putStr "⤷ "
 
-    printValue :: Int -> Int -> Reason -> IO ()
-    printValue level lit reason
+    printValue :: Int -> Int -> VariableData -> IO ()
+    printValue level lit VariableData {value, reason}
       | level > 4 = do
           printIndent level
           putStrLn "..."
       | otherwise = do
           printIndent level
           let atom = abs lit
-              value = if lit > 0 then "" else "¬"
-          printf "%s%d" value atom
+              negation = if value then "" else "¬"
+          printf "%s%d" negation atom
           case reason of
             Decision -> printf " by decision\n"
             Consequence n -> do
