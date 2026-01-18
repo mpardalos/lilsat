@@ -20,6 +20,7 @@ main = do
   getSATLIBTests "flat30-60" "sat" "https://www.cs.ubc.ca/~hoos/SATLIB/Benchmarks/SAT/GCP/flat30-60.tar.gz"
   getSATLIBTests "sw100-8-lp0-c5" "sat" "https://www.cs.ubc.ca/~hoos/SATLIB/Benchmarks/SAT/SW-GCP/sw100-8-lp0-c5.tar.gz"
   getSATLIBTests "planning" "sat" "https://www.cs.ubc.ca/~hoos/SATLIB/Benchmarks/SAT/PLANNING/BlocksWorld/blocksworld.tar.gz"
+  getSATLIBTests "uniform-unsat75" "unsat" "https://www.cs.ubc.ca/~hoos/SATLIB/Benchmarks/SAT/RND3SAT/uuf75-325.tar.gz"
 
   (satTests, unsatTests) <- discoverTests testDir
 
