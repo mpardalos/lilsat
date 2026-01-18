@@ -1,5 +1,3 @@
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternSynonyms #-}
@@ -8,11 +6,12 @@
 module Lilsat
   ( -- Types
     Atom,
-    Literal,
+    Literal (..),
     Clause,
     Formula,
     Valuation,
     Answer (..),
+    Reason (..),
     -- Pattern synonyms
     pattern Positive,
     pattern Negative,
@@ -28,22 +27,28 @@ module Lilsat
 where
 
 import Control.Monad (join)
-import Data.Coerce (coerce)
 import Data.Function ((&))
+import Data.IntMap (IntMap)
+import Data.IntMap qualified as IntMap
 import Data.IntSet (IntSet)
 import Data.IntSet qualified as IntSet
-import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Debug.Trace (trace)
-import Safe (headMay, headNote, readNote)
+import Safe (headMay, readNote)
 
 type Atom = Int
 
 newtype Literal = Literal Atom
-  deriving (Show, Eq, Ord)
+  deriving (Eq, Ord)
+
+instance Show Literal where
+  show (Literal lit)
+    | lit < 0 = "¬" ++ show (abs lit)
+    | otherwise = show lit
 
 type Clause = Vector Literal
 
@@ -64,20 +69,16 @@ pattern Negative n <- Literal (\x -> if x < 0 then Just (fromIntegral (negate x)
 negateLit :: Literal -> Literal
 negateLit (Literal n) = Literal (-n)
 
-type Valuation = IntSet
+data Reason = Decision | Consequence Int
+  deriving (Show)
 
-learn :: Literal -> Valuation -> Valuation
-learn (Literal lit) valuation
-  -- | trace ("Propagated " ++ show lit) False = undefined
-  | IntSet.member (-lit) valuation = error ("Conflicting learn " ++ show lit)
-  | otherwise = IntSet.insert lit valuation
+type Valuation = IntMap Reason
 
-learnNew :: Literal -> Valuation -> Valuation
-learnNew (Literal lit) valuation
-  -- | trace ("Decided " ++ show lit) False = undefined
-  | IntSet.member lit valuation = trace ("Double learning " ++ show lit) valuation
-  | IntSet.member (-lit) valuation = error ("Conflicting learn " ++ show lit)
-  | otherwise = IntSet.insert lit valuation
+learn :: Literal -> Reason -> Valuation -> Valuation
+learn (Literal lit) reason valuation
+  | IntMap.member lit valuation = error ("Double learn " ++ show lit)
+  | IntMap.member (-lit) valuation = error ("Conflicting learn " ++ show lit)
+  | otherwise = IntMap.insert lit reason valuation
 
 data Answer
   = SAT Valuation
@@ -102,8 +103,8 @@ partialOr _ _ = Nothing
 
 evalLiteral :: Valuation -> Literal -> Maybe Bool
 evalLiteral valuation (Literal lit)
-  | IntSet.member lit valuation = Just True
-  | IntSet.member (-lit) valuation = Just False
+  | IntMap.member lit valuation = Just True
+  | IntMap.member (-lit) valuation = Just False
   | otherwise = Nothing -- error ("Not in valuation: " ++ show lit)
 
 evalClause :: Valuation -> Clause -> Maybe Bool
@@ -143,27 +144,27 @@ chooseLit valuation =
     . join
 
 unitPropagate :: Formula -> Valuation -> Maybe Valuation
-unitPropagate formula initialValuation = V.foldM unitPropagateClause initialValuation formula
+unitPropagate formula initialValuation = V.foldM unitPropagateClause initialValuation $ V.imap (,) formula
   where
-    unitPropagateClause :: Valuation -> Clause -> Maybe Valuation
-    unitPropagateClause valuation clause =
+    unitPropagateClause :: Valuation -> (Int, Clause) -> Maybe Valuation
+    unitPropagateClause valuation (idx, clause) =
       let ambiguous = V.filter ((== Nothing) . evalLiteral valuation) clause
           hasTrue = (> 0) . V.length . V.filter ((== Just True) . evalLiteral valuation) $ clause
        in if hasTrue
             then Just valuation
             else case V.length ambiguous of
               0 -> Nothing
-              1 -> Just (learn (V.head ambiguous) valuation)
+              1 -> Just (learn (V.head ambiguous) (Consequence idx) valuation)
               _ -> Just valuation
 
 checkSat :: Formula -> Answer
-checkSat formula = go IntSet.empty
+checkSat formula = go IntMap.empty
   where
     go :: Valuation -> Answer
     go valuation
       | Just lit <- chooseLit valuation formula =
-          let withLit = go <$> unitPropagate formula (learnNew lit valuation)
-              withNegation = go <$> unitPropagate formula (learnNew (negateLit lit) valuation)
+          let withLit = go <$> unitPropagate formula (learn lit Decision valuation)
+              withNegation = go <$> unitPropagate formula (learn (negateLit lit) Decision valuation)
            in case withLit of
                 Just answer@SAT {} -> answer
                 _ -> fromMaybe UNSAT withNegation
