@@ -176,7 +176,9 @@ decideClause v = V.foldr go ClauseUNSAT
       (ClauseUnresolved, _) -> ClauseUnresolved
       (ClauseUnit _, Nothing) -> ClauseUnresolved
 
-unitPropagate :: Formula -> Valuation -> Maybe Valuation
+type ClauseIdx = Int
+
+unitPropagate :: Formula -> Valuation -> Either ClauseIdx Valuation
 unitPropagate formula initialValuation = V.foldM unitPropagateClause initialValuation $ V.imap (,) formula
   where
     literalLevel :: Valuation -> Literal -> Int
@@ -184,13 +186,13 @@ unitPropagate formula initialValuation = V.foldM unitPropagateClause initialValu
       Just varData -> varData.reason.level
       Nothing -> -1
 
-    unitPropagateClause :: Valuation -> (Int, Clause) -> Maybe Valuation
+    unitPropagateClause :: Valuation -> (Int, Clause) -> Either ClauseIdx Valuation
     unitPropagateClause v (idx, clause) =
       case decideClause v clause of
-        ClauseSAT -> Just v
-        ClauseUnresolved -> Just v
-        ClauseUNSAT -> Nothing
-        ClauseUnit lit -> Just (learn lit (Implied {antecedent = idx, level = maximum (V.map (literalLevel v) clause)}) v)
+        ClauseSAT -> Right v
+        ClauseUnresolved -> Right v
+        ClauseUNSAT -> Left idx
+        ClauseUnit lit -> Right (learn lit (Implied {antecedent = idx, level = maximum (V.map (literalLevel v) clause)}) v)
 
 checkSat :: Formula -> Answer
 checkSat formula = go 0 IntMap.empty
@@ -198,9 +200,15 @@ checkSat formula = go 0 IntMap.empty
     go :: Int -> Valuation -> Answer
     go decisionLevel valuation
       | Just lit <- chooseLit valuation formula =
-          let withLit = go (decisionLevel + 1) <$> unitPropagate formula (learn lit (Decision decisionLevel) valuation)
-              withNegation = go (decisionLevel + 1) <$> unitPropagate formula (learn (negateLit lit) (Decision decisionLevel) valuation)
+          let withLit =
+                go (decisionLevel + 1)
+                  <$> unitPropagate formula (learn lit (Decision decisionLevel) valuation)
+              withNegation =
+                go (decisionLevel + 1)
+                  <$> unitPropagate formula (learn (negateLit lit) (Decision decisionLevel) valuation)
            in case withLit of
-                Just answer@SAT {} -> answer
-                _ -> fromMaybe UNSAT withNegation
+                Right answer@SAT {} -> answer
+                _ -> case withNegation of
+                  Right answer@SAT {} -> answer
+                  _ -> UNSAT
       | otherwise = SAT valuation
