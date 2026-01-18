@@ -29,9 +29,11 @@ module Lilsat
 where
 
 import Control.Monad (join)
-import Data.Function ((&))
+import Data.Function (on, (&))
 import Data.IntMap (IntMap)
 import Data.IntMap qualified as IntMap
+import Data.IntSet (IntSet)
+import Data.IntSet qualified as IntSet
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -175,6 +177,23 @@ decideClause v = V.foldr go ClauseUNSAT
       (ClauseUNSAT, Nothing) -> ClauseUnit lit
       (ClauseUnresolved, _) -> ClauseUnresolved
       (ClauseUnit _, Nothing) -> ClauseUnresolved
+
+atom :: Literal -> Atom
+atom (Literal lit) = abs lit
+
+-- Assuming that there exists a literal x, such that x ∈ ω1 and ¬x ∈ ω2, return a clause:
+-- ω3 = { y | (y ∈ ω1 ∨ y ∈ ω2) ∧ (x ≠ y) }
+resolveClauses :: Clause -> Clause -> Clause
+resolveClauses c1 c2 = V.filter (not . common) (c1 V.++ c2)
+  where
+    common :: Literal -> Bool
+    common lit =
+      V.elem (atom lit) (V.map atom c1)
+        && V.elem (atom lit) (V.map atom c2)
+
+-- TODO: iterate on this, starting from a falsified clause and picking
+-- its antecedents until no more antecedents or fixed point (is fixed
+-- point even possible without antecedents?)
 
 type ClauseIdx = Int
 
