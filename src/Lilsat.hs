@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedLists #-}
+{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ViewPatterns #-}
@@ -67,8 +68,20 @@ pattern Negative n <- Literal (\x -> if x < 0 then Just (fromIntegral (negate x)
 negateLit :: Literal -> Literal
 negateLit (Literal n) = Literal (-n)
 
-data Reason = Decision | Consequence Int
-  deriving (Show)
+data Reason
+  = Decision {level :: Int}
+  | Implied {level :: Int, antecedent :: Int}
+  deriving (Show, Eq)
+
+instance Ord Reason where
+  compare (Decision level1) (Decision level2) =
+    compare level1 level2
+  compare (Implied level1 antecedent1) (Implied level2 antecedent2) =
+    compare level1 level2 <> compare antecedent1 antecedent2
+  compare (Decision level1) (Implied level2 _) =
+    compare level1 level2 <> LT
+  compare (Implied level1 _) (Decision level2) =
+    compare level1 level2 <> GT
 
 data VariableData = VariableData
   { value :: Bool,
@@ -166,22 +179,27 @@ decideClause v = V.foldr go ClauseUNSAT
 unitPropagate :: Formula -> Valuation -> Maybe Valuation
 unitPropagate formula initialValuation = V.foldM unitPropagateClause initialValuation $ V.imap (,) formula
   where
+    literalLevel :: Valuation -> Literal -> Int
+    literalLevel v (Literal lit) = case IntMap.lookup (abs lit) v of
+      Just varData -> varData.reason.level
+      Nothing -> -1
+
     unitPropagateClause :: Valuation -> (Int, Clause) -> Maybe Valuation
     unitPropagateClause v (idx, clause) =
       case decideClause v clause of
         ClauseSAT -> Just v
         ClauseUnresolved -> Just v
         ClauseUNSAT -> Nothing
-        ClauseUnit lit -> Just (learn lit (Consequence idx) v)
+        ClauseUnit lit -> Just (learn lit (Implied {antecedent = idx, level = maximum (V.map (literalLevel v) clause)}) v)
 
 checkSat :: Formula -> Answer
-checkSat formula = go IntMap.empty
+checkSat formula = go 0 IntMap.empty
   where
-    go :: Valuation -> Answer
-    go valuation
+    go :: Int -> Valuation -> Answer
+    go decisionLevel valuation
       | Just lit <- chooseLit valuation formula =
-          let withLit = go <$> unitPropagate formula (learn lit Decision valuation)
-              withNegation = go <$> unitPropagate formula (learn (negateLit lit) Decision valuation)
+          let withLit = go (decisionLevel + 1) <$> unitPropagate formula (learn lit (Decision decisionLevel) valuation)
+              withNegation = go (decisionLevel + 1) <$> unitPropagate formula (learn (negateLit lit) (Decision decisionLevel) valuation)
            in case withLit of
                 Just answer@SAT {} -> answer
                 _ -> fromMaybe UNSAT withNegation
