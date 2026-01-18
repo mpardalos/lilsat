@@ -31,6 +31,9 @@ printValuation formula valuation =
           printIndent nest
           let atom = abs lit
               negation = if value then "" else "¬"
+          case reason of
+            Decision{} | nest == 0 -> putStrLn "----------"
+            _ -> pure ()
           printf "%s%d" negation atom
           case reason of
             Decision {level} -> printf " by decision %d\n" level
