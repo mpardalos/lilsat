@@ -1,5 +1,6 @@
 module Main where
 
+import Control.Monad (when)
 import Data.Foldable (forM_)
 import Data.IntMap qualified as IntMap
 import Data.List (intercalate, sortBy)
@@ -10,21 +11,42 @@ import Lilsat
 import System.Environment (getArgs)
 import Text.Printf (printf)
 
-showClause :: Clause -> String
-showClause =
-  intercalate " ∨ "
-    . map show
-    . V.toList
-
 printValuation :: Formula -> Valuation -> IO ()
 printValuation formula valuation =
-  forM_ (sortBy (comparing (abs . fst)) $ IntMap.toList valuation) $ \(lit, reason) -> do
-    let atom = abs lit
-        value = if lit > 0 then "✅" else "❌"
-    printf "%s %d" value atom
-    case reason of
-      Decision -> printf " by decision\n"
-      Consequence n -> printf " by #%-3d (%s)\n" n (showClause (formula V.! n))
+  mapM_
+    (uncurry (printValue 0))
+    (sortBy (comparing (abs . fst)) $ IntMap.toList valuation)
+  where
+    printIndent :: Int -> IO ()
+    printIndent level = do
+      putStr (replicate (2 * level) ' ')
+      when (level > 0) $ putStr "⤷ "
+
+    printValue :: Int -> Int -> Reason -> IO ()
+    printValue level lit reason
+      | level > 4 = do
+          printIndent level
+          putStrLn "..."
+      | otherwise = do
+          printIndent level
+          let atom = abs lit
+              value = if lit > 0 then "" else "¬"
+          printf "%s%d" value atom
+          case reason of
+            Decision -> printf " by decision\n"
+            Consequence n -> do
+              let clause = formula V.! n
+              printf " by #%d (%s)\n" n (showClause clause)
+              forM_ clause $ \(Literal causeLit) ->
+                when (causeLit /= lit) $
+                  let valuationLit = if IntMap.member causeLit valuation then causeLit else (-causeLit)
+                   in printValue (level + 1) valuationLit (valuation IntMap.! valuationLit)
+
+    showClause :: Clause -> String
+    showClause =
+      intercalate " ∨ "
+        . map show
+        . V.toList
 
 main :: IO ()
 main = do
