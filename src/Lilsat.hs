@@ -140,19 +140,34 @@ chooseLit valuation =
     . V.filter ((Nothing ==) . evalLiteral valuation)
     . join
 
+data ClauseDecision
+  = ClauseSAT
+  | ClauseUNSAT
+  | ClauseUnresolved
+  | ClauseUnit Literal
+
+decideClause :: Valuation -> Clause -> ClauseDecision
+decideClause v = V.foldr go ClauseUNSAT
+  where
+    go :: Literal -> ClauseDecision -> ClauseDecision
+    go lit decision = case (decision, evalLiteral v lit) of
+      (_, Just True) -> ClauseSAT
+      (_, Just False) -> decision
+      (ClauseSAT, _) -> ClauseSAT
+      (ClauseUNSAT, Nothing) -> ClauseUnit lit
+      (ClauseUnresolved, _) -> ClauseUnresolved
+      (ClauseUnit _, Nothing) -> ClauseUnresolved
+
 unitPropagate :: Formula -> Valuation -> Maybe Valuation
 unitPropagate formula initialValuation = V.foldM unitPropagateClause initialValuation $ V.imap (,) formula
   where
     unitPropagateClause :: Valuation -> (Int, Clause) -> Maybe Valuation
-    unitPropagateClause valuation (idx, clause) =
-      let ambiguous = V.filter ((== Nothing) . evalLiteral valuation) clause
-          hasTrue = (> 0) . V.length . V.filter ((== Just True) . evalLiteral valuation) $ clause
-       in if hasTrue
-            then Just valuation
-            else case V.length ambiguous of
-              0 -> Nothing
-              1 -> Just (learn (V.head ambiguous) (Consequence idx) valuation)
-              _ -> Just valuation
+    unitPropagateClause v (idx, clause) =
+      case decideClause v clause of
+        ClauseSAT -> Just v
+        ClauseUnresolved -> Just v
+        ClauseUNSAT -> Nothing
+        ClauseUnit lit -> Just (learn lit (Consequence idx) v)
 
 checkSat :: Formula -> Answer
 checkSat formula = go IntMap.empty
