@@ -198,20 +198,24 @@ resolveClauses c1 c2 = V.filter (not . common) (c1 V.++ c2)
 type ClauseIdx = Int
 
 unitPropagate :: Formula -> Valuation -> Either ClauseIdx Valuation
-unitPropagate formula initialValuation = V.foldM unitPropagateClause initialValuation $ V.imap (,) formula
+unitPropagate formula initialValuation = do
+  (changed, valuation) <- V.foldM unitPropagateClause (False, initialValuation) $ V.imap (,) formula
+  if changed
+    then unitPropagate formula valuation
+    else Right valuation
   where
     literalLevel :: Valuation -> Literal -> Int
     literalLevel v (Literal lit) = case IntMap.lookup (abs lit) v of
       Just varData -> varData.reason.level
       Nothing -> -1
 
-    unitPropagateClause :: Valuation -> (Int, Clause) -> Either ClauseIdx Valuation
-    unitPropagateClause v (idx, clause) =
+    unitPropagateClause :: (Bool, Valuation) -> (Int, Clause) -> Either ClauseIdx (Bool, Valuation)
+    unitPropagateClause (changed, v) (idx, clause) =
       case decideClause v clause of
-        ClauseSAT -> Right v
-        ClauseUnresolved -> Right v
+        ClauseSAT -> Right (changed, v)
+        ClauseUnresolved -> Right (changed, v)
         ClauseUNSAT -> Left idx
-        ClauseUnit lit -> Right (learn lit (Implied {antecedent = idx, level = maximum (V.map (literalLevel v) clause)}) v)
+        ClauseUnit lit -> Right (True, learn lit (Implied {antecedent = idx, level = maximum (V.map (literalLevel v) clause)}) v)
 
 checkSat :: Formula -> Answer
 checkSat formula = go 0 IntMap.empty
