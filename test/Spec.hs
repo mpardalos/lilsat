@@ -102,7 +102,7 @@ makeTest predicate filePath =
     mAnswer <- timeout 10_000_000 $ evaluate (checkSat formula)
     case mAnswer of
       Nothing -> pendingWith "Timed out"
-      Just answer -> do
+      Just (_, answer) -> do
         answer `shouldSatisfy` predicate
         case answer of
           SAT valuation -> evalFormula valuation formula `shouldBe` Just True

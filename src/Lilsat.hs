@@ -3,6 +3,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE LambdaCase #-}
 
 module Lilsat
   ( -- Types
@@ -29,17 +30,17 @@ module Lilsat
 where
 
 import Control.Monad (join)
-import Data.Function (on, (&))
-import Data.IntMap (IntMap)
-import Data.IntMap qualified as IntMap
-import Data.IntSet (IntSet)
-import Data.IntSet qualified as IntSet
-import Data.Maybe (fromMaybe)
+import Data.Function ((&))
+import Data.List (intercalate)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Vector (Vector)
 import Data.Vector qualified as V
-import Safe (headMay, readNote)
+import Safe (fromJustNote, headMay, readNote)
+import Safe.Foldable (maximumNote, minimumNote)
+import Text.Printf (printf)
+import Data.Maybe (isJust)
 
 type Atom = Int
 
@@ -91,12 +92,22 @@ data VariableData = VariableData
   }
   deriving (Show)
 
-type Valuation = IntMap VariableData
+type Valuation = Vector (Maybe VariableData)
 
 learn :: Literal -> Reason -> Valuation -> Valuation
 learn (Literal lit) reason valuation
-  | IntMap.member lit valuation = error ("Double learn " ++ show lit)
-  | otherwise = IntMap.insert (abs lit) (VariableData {value = lit > 0, reason}) valuation
+  | isJust (valuation V.! abs lit) = error ("Double learn " ++ show lit)
+  | otherwise = V.update valuation [(abs lit, Just VariableData {value = lit > 0, reason})]
+
+varData :: Valuation -> Atom -> Maybe VariableData
+varData v var
+  | var < 0 = error "Negative var in varData"
+  | otherwise = v V.! var
+
+varLevel :: Valuation -> Atom -> Maybe Int
+varLevel v var = case varData v var of
+  Just d -> Just d.reason.level
+  Nothing -> Nothing
 
 data Answer
   = SAT Valuation
@@ -121,7 +132,7 @@ partialOr _ _ = Nothing
 
 evalLiteral :: Valuation -> Literal -> Maybe Bool
 evalLiteral valuation (Literal lit) =
-  let atomValue = value <$> IntMap.lookup (abs lit) valuation
+  let atomValue = value <$> valuation V.! abs lit
    in if lit > 0 then atomValue else not <$> atomValue
 
 evalClause :: Valuation -> Clause -> Maybe Bool
@@ -188,50 +199,130 @@ resolveClauses c1 c2 = V.filter (not . common) (c1 V.++ c2)
   where
     common :: Literal -> Bool
     common lit =
-      V.elem (atom lit) (V.map atom c1)
-        && V.elem (atom lit) (V.map atom c2)
+      (V.elem lit c1 && V.elem (negateLit lit) c2)
+        || (V.elem (negateLit lit) c1 && V.elem lit c2)
 
--- TODO: iterate on this, starting from a falsified clause and picking
--- its antecedents until no more antecedents or fixed point (is fixed
--- point even possible without antecedents?)
+simplifyClause :: Clause -> Clause
+simplifyClause = V.fromList . Set.toList . Set.fromList . V.toList
+
+choosePivot1UIP :: Valuation -> Int -> Clause -> Maybe ClauseIdx
+choosePivot1UIP v currentLevel clause =
+  let atCurrentLevel =
+        V.filter
+          (maybe False ((== currentLevel) . level . reason) . varData v . atom)
+          clause
+      candidates =
+        V.mapMaybe
+          ( \lit -> case varData v (atom lit) of
+              Just VariableData {reason = Implied {level, antecedent}}
+                | level == currentLevel -> Just antecedent
+              _ -> Nothing
+          )
+          atCurrentLevel
+   in case V.length atCurrentLevel of
+        0 -> error "No available pivot"
+        1 -> Nothing -- We're at 1UIP
+        _ -> headMay $ V.toList candidates
+
+showBool :: Bool -> String
+showBool True = "⊤"
+showBool False = "⊥"
+
+showClauseWith :: Valuation -> Clause -> String
+showClauseWith v c =
+  intercalate
+    " ∨ "
+    [ printf
+        "%s (%s)"
+        (show lit)
+        ( case varData v (atom lit) of
+            Nothing -> "undecided"
+            Just VariableData {value, reason = Decision {level}} ->
+              printf "%s@%d" (showBool value) level
+            Just VariableData {value, reason = Implied {level, antecedent}} ->
+              printf "%s@%d <- %d" (showBool value) level antecedent
+        )
+    | lit <- V.toList c
+    ]
+
+analyzeConflict :: Formula -> Valuation -> Int -> Clause -> (Int, Clause)
+-- analyzeConflict _ v _ (simplifyClause -> clause)
+--   | trace ("analyzeConflict " ++ showClauseWith v clause) False = undefined
+analyzeConflict formula v currentLevel (simplifyClause -> clause) =
+  case choosePivot1UIP v currentLevel clause of
+    Nothing ->
+      ( minimumNote
+          "empty clause"
+          ( V.map
+              ( fromJustNote "Undecided variable in conflict clause"
+                  . varLevel v
+                  . atom
+              )
+              clause
+          ),
+        clause
+      )
+    Just antecedent ->
+      analyzeConflict
+        formula
+        v
+        currentLevel
+        (resolveClauses clause (formula V.! antecedent))
 
 type ClauseIdx = Int
 
-unitPropagate :: Formula -> Valuation -> Either ClauseIdx Valuation
+unitPropagate :: Formula -> Valuation -> Either (ClauseIdx, Valuation) Valuation
 unitPropagate formula initialValuation = do
   (changed, valuation) <- V.foldM unitPropagateClause (False, initialValuation) $ V.imap (,) formula
   if changed
     then unitPropagate formula valuation
     else Right valuation
   where
-    literalLevel :: Valuation -> Literal -> Int
-    literalLevel v (Literal lit) = case IntMap.lookup (abs lit) v of
-      Just varData -> varData.reason.level
-      Nothing -> -1
-
-    unitPropagateClause :: (Bool, Valuation) -> (Int, Clause) -> Either ClauseIdx (Bool, Valuation)
+    unitPropagateClause :: (Bool, Valuation) -> (Int, Clause) -> Either (ClauseIdx, Valuation) (Bool, Valuation)
     unitPropagateClause (changed, v) (idx, clause) =
       case decideClause v clause of
         ClauseSAT -> Right (changed, v)
         ClauseUnresolved -> Right (changed, v)
-        ClauseUNSAT -> Left idx
-        ClauseUnit lit -> Right (True, learn lit (Implied {antecedent = idx, level = maximum (V.map (literalLevel v) clause)}) v)
+        ClauseUNSAT -> Left (idx, v)
+        ClauseUnit lit ->
+          let level
+                | V.length clause == 1 = 0
+                | otherwise =
+                    maximumNote
+                      ("No antecedents for " ++ showClauseWith v clause)
+                      (V.mapMaybe (varLevel v . atom) clause)
+           in Right (True, learn lit (Implied {antecedent = idx, level}) v)
 
-checkSat :: Formula -> Answer
-checkSat formula = go 0 IntMap.empty
+backtrackTo :: Int -> Valuation -> Valuation
+backtrackTo level = V.map $ \case
+  Just VariableData{reason}
+    | reason.level >= level -> Nothing
+  x -> x
+
+checkSat :: Formula -> (Formula, Answer)
+checkSat initialFormula = go initialFormula initialValuation 0
   where
-    go :: Int -> Valuation -> Answer
-    go decisionLevel valuation
+    maxVar =
+      join initialFormula
+      & V.map atom
+      & maximumNote "Empty formula"
+
+    initialValuation = V.replicate (maxVar + 1) Nothing
+    
+    go :: Formula -> Valuation -> Int -> (Formula, Answer)
+    go formula valuation level
       | Just lit <- chooseLit valuation formula =
-          let withLit =
-                go (decisionLevel + 1)
-                  <$> unitPropagate formula (learn lit (Decision decisionLevel) valuation)
-              withNegation =
-                go (decisionLevel + 1)
-                  <$> unitPropagate formula (learn (negateLit lit) (Decision decisionLevel) valuation)
-           in case withLit of
-                Right answer@SAT {} -> answer
-                _ -> case withNegation of
-                  Right answer@SAT {} -> answer
-                  _ -> UNSAT
-      | otherwise = SAT valuation
+          case unitPropagate formula (learn lit (Decision {level}) valuation) of
+            Left (conflictIdx, propagated) ->
+              let conflictClause = formula V.! conflictIdx
+                  (backtrackLevel, learntClause) = analyzeConflict formula propagated level conflictClause
+                  backtracked = backtrackTo backtrackLevel propagated
+                  extendedFormula =
+                    V.snoc
+                      formula
+                      learntClause
+               in case unitPropagate extendedFormula backtracked of
+                    Left {} -> (extendedFormula, UNSAT)
+                    Right propagated2 -> go extendedFormula propagated2 backtrackLevel
+            Right propagated -> go formula propagated (level + 1)
+      | otherwise = (formula, SAT valuation)
