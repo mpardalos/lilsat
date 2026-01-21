@@ -1,9 +1,9 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ViewPatterns #-}
-{-# LANGUAGE LambdaCase #-}
 
 module Lilsat
   ( -- Types
@@ -30,17 +30,21 @@ module Lilsat
 where
 
 import Control.Monad (join)
+import Control.Monad.ST (ST, runST)
 import Data.Function ((&))
+import Data.Functor ((<&>))
 import Data.List (intercalate)
+import Data.Maybe (isJust)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Vector (Vector)
 import Data.Vector qualified as V
+import Data.Vector.Mutable (STVector)
+import Data.Vector.Mutable qualified as MV
 import Safe (fromJustNote, headMay, readNote)
 import Safe.Foldable (maximumNote, minimumNote)
 import Text.Printf (printf)
-import Data.Maybe (isJust)
 
 type Atom = Int
 
@@ -95,14 +99,23 @@ data VariableData = VariableData
 type Valuation = Vector (Maybe VariableData)
 
 learn :: Literal -> Reason -> Valuation -> Valuation
-learn (Literal lit) reason valuation
-  | isJust (valuation V.! abs lit) = error ("Double learn " ++ show lit)
-  | otherwise = V.update valuation [(abs lit, Just VariableData {value = lit > 0, reason})]
+learn lit reason = V.modify (learnST lit reason)
+
+learnST :: Literal -> Reason -> STValuation s -> ST s ()
+learnST (Literal lit) reason valuation = do
+  MV.read valuation (abs lit) >>= \case
+    Just {} -> error ("Double learn " ++ show lit)
+    Nothing -> MV.write valuation (abs lit) (Just VariableData {value = lit > 0, reason})
 
 varData :: Valuation -> Atom -> Maybe VariableData
 varData v var
   | var < 0 = error "Negative var in varData"
   | otherwise = v V.! var
+
+varDataST :: STValuation s -> Atom -> ST s (Maybe VariableData)
+varDataST v var
+  | var < 0 = error "Negative var in varData"
+  | otherwise = MV.read v var
 
 varLevel :: Valuation -> Atom -> Maybe Int
 varLevel v var = case varData v var of
@@ -170,24 +183,6 @@ chooseLit valuation =
     . V.toList
     . V.filter ((Nothing ==) . evalLiteral valuation)
     . join
-
-data ClauseDecision
-  = ClauseSAT
-  | ClauseUNSAT
-  | ClauseUnresolved
-  | ClauseUnit Literal
-
-decideClause :: Valuation -> Clause -> ClauseDecision
-decideClause v = V.foldr go ClauseUNSAT
-  where
-    go :: Literal -> ClauseDecision -> ClauseDecision
-    go lit decision = case (decision, evalLiteral v lit) of
-      (_, Just True) -> ClauseSAT
-      (_, Just False) -> decision
-      (ClauseSAT, _) -> ClauseSAT
-      (ClauseUNSAT, Nothing) -> ClauseUnit lit
-      (ClauseUnresolved, _) -> ClauseUnresolved
-      (ClauseUnit _, Nothing) -> ClauseUnresolved
 
 atom :: Literal -> Atom
 atom (Literal lit) = abs lit
@@ -271,31 +266,87 @@ analyzeConflict formula v currentLevel (simplifyClause -> clause) =
 
 type ClauseIdx = Int
 
-unitPropagate :: Formula -> Valuation -> Either (ClauseIdx, Valuation) Valuation
-unitPropagate formula initialValuation = do
-  (changed, valuation) <- V.foldM unitPropagateClause (False, initialValuation) $ V.imap (,) formula
-  if changed
-    then unitPropagate formula valuation
-    else Right valuation
+data ClauseDecision
+  = ClauseSAT
+  | ClauseUNSAT
+  | ClauseUnresolved
+  | ClauseUnit Literal
+
+decideClauseST :: forall s. STValuation s -> Clause -> ST s ClauseDecision
+decideClauseST v = V.foldM go ClauseUNSAT
   where
-    unitPropagateClause :: (Bool, Valuation) -> (Int, Clause) -> Either (ClauseIdx, Valuation) (Bool, Valuation)
-    unitPropagateClause (changed, v) (idx, clause) =
-      case decideClause v clause of
-        ClauseSAT -> Right (changed, v)
-        ClauseUnresolved -> Right (changed, v)
-        ClauseUNSAT -> Left (idx, v)
-        ClauseUnit lit ->
-          let level
-                | V.length clause == 1 = 0
-                | otherwise =
-                    maximumNote
-                      ("No antecedents for " ++ showClauseWith v clause)
-                      (V.mapMaybe (varLevel v . atom) clause)
-           in Right (True, learn lit (Implied {antecedent = idx, level}) v)
+    go :: ClauseDecision -> Literal -> ST s ClauseDecision
+    go decision lit = do
+      value <- evalLiteralST v lit
+      return $ case (decision, value) of
+        (_, Just True) -> ClauseSAT
+        (_, Just False) -> decision
+        (ClauseSAT, _) -> ClauseSAT
+        (ClauseUNSAT, Nothing) -> ClauseUnit lit
+        (ClauseUnresolved, _) -> ClauseUnresolved
+        (ClauseUnit _, Nothing) -> ClauseUnresolved
+
+type STValuation s = STVector s (Maybe VariableData)
+
+evalLiteralST :: STValuation s -> Literal -> ST s (Maybe Bool)
+evalLiteralST valuation (Literal lit) = do
+  atomValue <- fmap value <$> MV.read valuation (abs lit)
+  if lit > 0
+    then return atomValue
+    else return (not <$> atomValue)
+
+varLevelST :: STValuation s -> Atom -> ST s (Maybe Int)
+varLevelST v var =
+  varDataST v var <&> \case
+    Just d -> Just d.reason.level
+    Nothing -> Nothing
+
+unitPropagateST :: forall s. Formula -> STValuation s -> ST s (Maybe ClauseIdx)
+unitPropagateST formula v = do
+  (changed, errorClause) <- V.ifoldM'
+    ( \(changed, errorClause) idx clause ->
+        if isJust errorClause
+          then return (changed, errorClause)
+          else
+            decideClauseST v clause >>= \case
+              ClauseSAT -> return (changed, Nothing)
+              ClauseUnresolved -> return (changed, Nothing)
+              ClauseUNSAT -> return (changed, Just idx)
+              ClauseUnit lit -> do
+                level <-
+                  if V.length clause == 1
+                    then return 0
+                    else
+                      V.foldM
+                        ( \maxLevel nextLit ->
+                            varLevelST v (atom nextLit) <&> \case
+                              Just l -> max maxLevel l
+                              Nothing -> maxLevel
+                        )
+                        0
+                        clause
+                learnST lit (Implied {antecedent = idx, level}) v
+                return (True, Nothing)
+    )
+    (False, Nothing)
+    formula
+  case (changed, errorClause) of
+    (_, Just idx) -> return (Just idx)
+    (True, Nothing) -> unitPropagateST formula v
+    (False, Nothing) -> return Nothing
+
+unitPropagate :: Formula -> Valuation -> Either (ClauseIdx, Valuation) Valuation
+unitPropagate formula initialValuation = runST $ do
+  mValuation <- V.thaw initialValuation
+  mConflict <- unitPropagateST formula mValuation
+  finalValuation <- V.freeze mValuation
+  return $ case mConflict of
+    Just conflict -> Left (conflict, finalValuation)
+    Nothing -> Right finalValuation
 
 backtrackTo :: Int -> Valuation -> Valuation
 backtrackTo level = V.map $ \case
-  Just VariableData{reason}
+  Just VariableData {reason}
     | reason.level >= level -> Nothing
   x -> x
 
@@ -304,11 +355,11 @@ checkSat initialFormula = go initialFormula initialValuation 0
   where
     maxVar =
       join initialFormula
-      & V.map atom
-      & maximumNote "Empty formula"
+        & V.map atom
+        & maximumNote "Empty formula"
 
     initialValuation = V.replicate (maxVar + 1) Nothing
-    
+
     go :: Formula -> Valuation -> Int -> (Formula, Answer)
     go formula valuation level
       | Just lit <- chooseLit valuation formula =
