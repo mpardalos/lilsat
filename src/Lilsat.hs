@@ -1,9 +1,9 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ViewPatterns #-}
-{-# LANGUAGE LambdaCase #-}
 
 module Lilsat
   ( -- Types
@@ -32,15 +32,15 @@ where
 import Control.Monad (join)
 import Data.Function ((&))
 import Data.List (intercalate)
+import Data.Maybe (isJust)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Safe (fromJustNote, headMay, readNote)
-import Safe.Foldable (maximumNote, minimumNote)
+import Safe.Foldable (maximumDef, maximumNote, minimumNote)
 import Text.Printf (printf)
-import Data.Maybe (isJust)
 
 type Atom = Int
 
@@ -98,6 +98,12 @@ learn :: Literal -> Reason -> Valuation -> Valuation
 learn (Literal lit) reason valuation
   | isJust (valuation V.! abs lit) = error ("Double learn " ++ show lit)
   | otherwise = V.update valuation [(abs lit, Just VariableData {value = lit > 0, reason})]
+
+learnAll :: Vector (Literal, Reason) -> Valuation -> Valuation
+learnAll updates valuation =
+  V.update valuation
+    . V.map (\(Literal lit, reason) -> (abs lit, Just VariableData {value = lit > 0, reason}))
+    $ updates
 
 varData :: Valuation -> Atom -> Maybe VariableData
 varData v var
@@ -272,30 +278,39 @@ analyzeConflict formula v currentLevel (simplifyClause -> clause) =
 type ClauseIdx = Int
 
 unitPropagate :: Formula -> Valuation -> Either (ClauseIdx, Valuation) Valuation
-unitPropagate formula initialValuation = do
-  (changed, valuation) <- V.foldM unitPropagateClause (False, initialValuation) $ V.imap (,) formula
-  if changed
-    then unitPropagate formula valuation
-    else Right valuation
-  where
-    unitPropagateClause :: (Bool, Valuation) -> (Int, Clause) -> Either (ClauseIdx, Valuation) (Bool, Valuation)
-    unitPropagateClause (changed, v) (idx, clause) =
-      case decideClause v clause of
-        ClauseSAT -> Right (changed, v)
-        ClauseUnresolved -> Right (changed, v)
-        ClauseUNSAT -> Left (idx, v)
-        ClauseUnit lit ->
-          let level
-                | V.length clause == 1 = 0
-                | otherwise =
-                    maximumNote
-                      ("No antecedents for " ++ showClauseWith v clause)
-                      (V.mapMaybe (varLevel v . atom) clause)
-           in Right (True, learn lit (Implied {antecedent = idx, level}) v)
+unitPropagate formula v =
+  let decisions = V.map (\c -> (c, decideClause v c)) formula
+      changed = any (\case (_, ClauseUnit {}) -> True; _ -> False) decisions
+      propagated =
+        learnAll
+          ( V.catMaybes $
+              V.imap
+                ( \idx (clause, decision) ->
+                    case decision of
+                      ClauseUnit lit ->
+                        let level = maximumDef 0 (V.mapMaybe (varLevel v . atom) clause)
+                         in Just (lit, Implied {antecedent = idx, level})
+                      _ -> Nothing
+                )
+                decisions
+          )
+          v
+      failedClause =
+        headMay . V.toList $
+          V.imapMaybe
+            ( \idx (_, decision) -> case decision of
+                ClauseUNSAT -> Just idx
+                _ -> Nothing
+            )
+            decisions
+   in case (failedClause, changed) of
+        (Just idx, _) -> Left (idx, v)
+        (Nothing, False) -> Right v
+        (Nothing, True) -> unitPropagate formula propagated
 
 backtrackTo :: Int -> Valuation -> Valuation
 backtrackTo level = V.map $ \case
-  Just VariableData{reason}
+  Just VariableData {reason}
     | reason.level >= level -> Nothing
   x -> x
 
@@ -304,11 +319,11 @@ checkSat initialFormula = go initialFormula initialValuation 0
   where
     maxVar =
       join initialFormula
-      & V.map atom
-      & maximumNote "Empty formula"
+        & V.map atom
+        & maximumNote "Empty formula"
 
     initialValuation = V.replicate (maxVar + 1) Nothing
-    
+
     go :: Formula -> Valuation -> Int -> (Formula, Answer)
     go formula valuation level
       | Just lit <- chooseLit valuation formula =
