@@ -38,10 +38,10 @@ import Data.Maybe (isJust)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Vector (Vector)
-import Data.Vector qualified as V
-import Data.Vector.Mutable (STVector)
-import Data.Vector.Mutable qualified as MV
+import Data.Vector.Strict (Vector)
+import Data.Vector.Strict qualified as V
+import Data.Vector.Strict.Mutable (STVector)
+import Data.Vector.Strict.Mutable qualified as MV
 import Safe (fromJustNote, headMay, readNote)
 import Safe.Foldable (maximumNote, minimumNote)
 import Text.Printf (printf)
@@ -76,8 +76,8 @@ negateLit :: Literal -> Literal
 negateLit (Literal n) = Literal (-n)
 
 data Reason
-  = Decision {level :: Int}
-  | Implied {level :: Int, antecedent :: Int}
+  = Decision {level :: !Int}
+  | Implied {level :: !Int, antecedent :: !Int}
   deriving (Show, Eq)
 
 instance Ord Reason where
@@ -91,8 +91,8 @@ instance Ord Reason where
     compare level1 level2 <> GT
 
 data VariableData = VariableData
-  { value :: Bool,
-    reason :: Reason
+  { value :: !Bool,
+    reason :: !Reason
   }
   deriving (Show)
 
@@ -270,7 +270,7 @@ data ClauseDecision
   = ClauseSAT
   | ClauseUNSAT
   | ClauseUnresolved
-  | ClauseUnit Literal
+  | ClauseUnit !Literal
 
 decideClauseST :: forall s. STValuation s -> Clause -> ST s ClauseDecision
 decideClauseST v = V.foldM go ClauseUNSAT

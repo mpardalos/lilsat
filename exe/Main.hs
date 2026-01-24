@@ -2,14 +2,12 @@ module Main where
 
 import Control.Monad (when)
 import Data.Foldable (forM_)
-import Data.IntMap qualified as IntMap
-import Data.List (intercalate, sortBy)
+import Data.List (intercalate)
 import Data.Text.IO qualified as TIO
-import Data.Vector qualified as V
+import Data.Vector.Strict qualified as V
 import Lilsat
 import System.Environment (getArgs)
 import Text.Printf (printf)
-import Data.Ord (comparing)
 
 printValuation :: Formula -> Valuation -> IO ()
 printValuation formula valuation =
