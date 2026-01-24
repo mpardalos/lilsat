@@ -1,2 +1,6 @@
 dist-newstyle/
 /tests/
+*.hp
+*.prof
+/*.prof.html
+/*.svg
